@@ -1,0 +1,4 @@
+*.o
+*.so
+gstbayerorc.c
+gstbayerorc.h
