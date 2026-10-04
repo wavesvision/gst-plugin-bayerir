@@ -2,3 +2,5 @@
 *.so
 gstbayerorc.c
 gstbayerorc.h
+gstbayerorc-dist.c
+gstbayerorc-dist.h
