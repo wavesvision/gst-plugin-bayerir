@@ -1,4 +1,4 @@
-CC := gcc-14
+CC ?= gcc
 
 PKG_CFG := gstreamer-1.0 gstreamer-base-1.0 orc-0.4
 PKG_CFG_ALL := gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 orc-0.4

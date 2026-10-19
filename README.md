@@ -6,11 +6,14 @@ This plugin is designed to debayer the pixel stream from a RGB-IR camera.
 
 
 ## Requirements
-A number of packages are required to build this.
+A number of packages are required to build and run this.
 
 For Debian:
 ```
-sudo apt-get install build-essential libgstreamer-plugins-base1.0-dev libgstreamer1.0-dev pkg-config
+sudo apt-get install build-essential pkg-config liborc-0.4-dev \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+sudo apt-get install v4l-utils gstreamer1.0-tools gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 ```
 
 
@@ -21,11 +24,35 @@ Change to the source directory, and run:
 make
 ```
 
-To test that it compiled correctly, run:
+Install the plugin into the system GStreamer plugin directory:
 ```
-GST_PLUGIN_PATH=. gst-inspect-1.0 bayerir2bayer
+sudo make install
+```
+
+After installation, GStreamer finds the plugin automatically, so `GST_PLUGIN_PATH` is not required.
+
+To test that it compiled and installed correctly, run:
+```
+gst-inspect-1.0 bayerir2bayer
 ```
 Should list the plugin's capabilities.
+
+
+## Capture device
+Find and configure the OX05B1S with one command (from the `kmod-ox05b1s-basic` repository):
+```
+bash ../kmod-ox05b1s-basic/scripts.d/media-ctl_setup.sh
+```
+
+The script prints the devices and sensor format, for example:
+```
+Media device: /dev/media0
+Video device: /dev/video8
+Sensor device: /dev/v4l-subdev6
+Sensor format: SRGGB10_1X10
+Configured sensor: SRGGB10_1X10/2592x1944
+```
+Use the printed `Video device` in the commands below. The examples below use `/dev/video8`; replace it with the device printed by the script on your system.
 
 
 ## Plugins
@@ -56,23 +83,30 @@ Several methods are provided to translate bayer IR to standard bayer:
 Fast mode is complete and should be able to handle any data streams presented.
 
 ### Linear averaging
-Linear average is incomplete, it can only handle GRBG streams and has no IR filter.
+Linear average currently has no IR filter. Use fast mode when IR filtering is required.
 
 
 ## Use
-To start streaming to a display (run from the plugin directory):
+To start streaming to a display:
 ```
-GST_PLUGIN_PATH=. gst-launch-1.0 v4l2src device=/dev/video0 ! 'video/x-bayer, format=(string)grbg10le, width=2592, height=1944, framerate=30/1' ! bayerir2bayer bayer-mode=rgbir-fast ! 'video/x-bayer,format=(string)grbg10le' ! bayer2rgb ! videoscale ! 'video/x-raw,height=800' ! ximagesink handle_events=false
+gst-launch-1.0 v4l2src device=/dev/video8 ! 'video/x-bayer,format=(string)rggb16le,width=(int)2592,height=(int)1944,framerate=(fraction)60/1' ! bayerir2bayer bayer-mode=rgbir-fast swap-order=false ! 'video/x-bayer,format=(string)rggb16le' ! bayer2rgb ! videoscale ! 'video/x-raw,height=800' ! ximagesink handle_events=false
 ```
 
-To start streaming to a display, enabling the daytime IR filter (run from the plugin directory):
+To start streaming to a display, enabling the daytime IR filter:
 ```
-GST_PLUGIN_PATH=. gst-launch-1.0 v4l2src device=/dev/video0 ! 'video/x-bayer, format=(string)grbg10le, width=2592, height=1944, framerate=30/1' ! bayerir2bayer bayer-mode=rgbir-fast filter-ir=day ! 'video/x-bayer,format=(string)grbg10le' ! bayer2rgb ! videoscale ! 'video/x-raw,height=800' ! ximagesink handle_events=false
+gst-launch-1.0 v4l2src device=/dev/video8 ! 'video/x-bayer,format=(string)rggb16le,width=(int)2592,height=(int)1944,framerate=(fraction)60/1' ! bayerir2bayer bayer-mode=rgbir-fast filter-ir=day swap-order=false ! 'video/x-bayer,format=(string)rggb16le' ! bayer2rgb ! videoscale ! 'video/x-raw,height=800' ! ximagesink handle_events=false
 ```
+
+The display examples require a graphical session. On a headless system, replace `ximagesink` with `fakesink`.
 
 
 ## Testing
-To measure the framerate of the pipeline (run from the plugin directory):
+To measure the framerate of the plugin path:
 ```
-GST_PLUGIN_PATH=. gst-launch-1.0 v4l2src device=/dev/video0 ! 'video/x-bayer, format=(string)grbg10le, width=2592, height=1944, framerate=30/1' ! bayerir2bayer bayer-mode=rgbir-test filter-ir=day ! 'video/x-bayer,format=(string)grbg10le' ! bayer2rgb ! fpsdisplaysink text-overlay=false video-sink=fakesink --verbose
-``
+gst-launch-1.0 v4l2src device=/dev/video8 ! 'video/x-bayer,format=(string)rggb16le,width=(int)2592,height=(int)1944,framerate=(fraction)60/1' ! bayerir2bayer bayer-mode=rgbir-lavg swap-order=false ! 'video/x-bayer,format=(string)rggb16le' ! fpsdisplaysink text-overlay=false video-sink=fakesink --verbose
+```
+
+To measure the full display/debayer path:
+```
+gst-launch-1.0 v4l2src device=/dev/video8 ! 'video/x-bayer,format=(string)rggb16le,width=(int)2592,height=(int)1944,framerate=(fraction)60/1' ! bayerir2bayer bayer-mode=rgbir-fast filter-ir=day swap-order=false ! 'video/x-bayer,format=(string)rggb16le' ! bayer2rgb ! fpsdisplaysink text-overlay=false video-sink=fakesink --verbose
+```

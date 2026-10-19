@@ -1321,7 +1321,7 @@ gst_bayerir2bayer_get_property (GObject * object, guint prop_id, GValue * value,
 			break;
 		case PROP_SWAP_ORDER:
 			GST_OBJECT_LOCK (filter);
-			g_value_set_enum (value, filter->swap_order);
+			g_value_set_boolean (value, filter->swap_order);
 			GST_OBJECT_UNLOCK (filter);
 			break;
 		default:
