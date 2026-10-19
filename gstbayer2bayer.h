@@ -68,6 +68,9 @@ struct _GstBayerIR2Bayer {
 	gboolean packed;			/* Whether the source stream is packed */
 	gboolean swap_order;			/* Whether to swap the processing order of lines */
 	uint bayer_mode;
+
+	uint8_t *cached_src;			/* Cached copy of DMA-BUF input */
+	gsize cached_src_size;
 };
 
 struct _GstBayerIRBayerClass {

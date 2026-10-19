@@ -550,8 +550,137 @@ gst_bayerir2bayer_process_16b_test_transform_gbrg_grbg:
 	}
 }
 
+static gboolean
+gst_bayerir2bayer_is_dmabuf_buffer (GstBuffer * buffer) {
+	GstMemory *mem = gst_buffer_peek_memory (buffer, 0);
+
+	return mem != NULL && gst_memory_is_type (mem, "dmabuf");
+}
+
+static inline void
+gst_bayerir2bayer_lavg_phase_a (uint64_t * restrict pixgrp_0, uint64_t * restrict pixgrp_1,
+		uint64_t * restrict pixgrp_0_prev, uint64_t * restrict pixgrp_1_prev) {
+	uint64_t pixgrp_tmp;
+
+	(*pixgrp_1)	&=	PIXMASK_42;
+	pixgrp_tmp	=	(*pixgrp_0) & PIXMASK_2;
+	pixgrp_tmp	>>=	16;
+	(*pixgrp_1)	|=	pixgrp_tmp;
+	pixgrp_tmp	&=	PIXMASK_1R;
+	pixgrp_tmp	<<=	31;
+	(*pixgrp_1)	|=	pixgrp_tmp;
+	(*pixgrp_1_prev) +=	pixgrp_tmp;
+
+	(*pixgrp_0)	&=	PIXMASK_431;
+	pixgrp_tmp	=	(*pixgrp_0) & PIXMASK_4R;
+	pixgrp_tmp	>>=	33;
+	(*pixgrp_0)	|=	pixgrp_tmp;
+	(*pixgrp_0)	+=	((*pixgrp_0_prev) & PIXMASK_4R) >> 33;
+}
+
+static inline void
+gst_bayerir2bayer_lavg_phase_b (uint64_t * restrict pixgrp_0, uint64_t * restrict pixgrp_1,
+		uint64_t * restrict pixgrp_0_prev, uint64_t * restrict pixgrp_1_prev) {
+	uint64_t pixgrp_tmp;
+
+	(*pixgrp_1)	&=	PIXMASK_42;
+	pixgrp_tmp	=	(*pixgrp_0) & PIXMASK_4;
+	pixgrp_tmp	>>=	16;
+	(*pixgrp_1)	|=	pixgrp_tmp;
+	pixgrp_tmp	>>=	33;
+	(*pixgrp_1)	|=	pixgrp_tmp;
+	(*pixgrp_1)	+=	(((*pixgrp_1_prev) & PIXMASK_3R) >> 33);
+
+	(*pixgrp_0)	&=	PIXMASK_321;
+	pixgrp_tmp	=	(*pixgrp_0) & PIXMASK_2R;
+	pixgrp_tmp	<<=	31;
+	(*pixgrp_0)	|=	pixgrp_tmp;
+	(*pixgrp_0_prev) +=	pixgrp_tmp;
+}
+
+static inline uint64_t
+gst_bayerir2bayer_lavg_load (const uint8_t * src) {
+	uint64_t val;
+	memcpy (&val, src, sizeof (val));
+	return val;
+}
+
+static inline void
+gst_bayerir2bayer_lavg_store (uint8_t * dest, uint64_t val) {
+	memcpy (dest, &val, sizeof (val));
+}
+
 static void
-gst_bayerir2bayer_process_16b_lavg (GstBayerIR2Bayer * filter, uint8_t * dest, uint8_t * src) {
+gst_bayerir2bayer_process_16b_lavg_16 (GstBayerIR2Bayer * filter, uint8_t * dest, const uint8_t * src) {
+	const int height = filter->height;
+	const int groups = (filter->width + 3) / 4;
+	const int src_stride = filter->src_stride;
+	const int dst_stride = filter->dst_stride;
+	const int src_shift = filter->src_shift;
+	int src_y, src_x;
+
+	for (src_y = 0; src_y < height; src_y += 2) {
+		uint8_t *dst_ptr0 = dest + (size_t) dst_stride * src_y;
+		uint8_t *dst_ptr1 = dst_ptr0 + dst_stride;
+		const uint8_t *src_ptr0 = src + (size_t) src_stride * src_y;
+		const uint8_t *src_ptr1 = src_ptr0 + src_stride;
+		uint64_t pixgrp_0, pixgrp_1, pixgrp_0_prev = 0, pixgrp_1_prev = 0;
+		uint64_t raw_0, raw_1;
+
+		raw_0 = gst_bayerir2bayer_lavg_load (src_ptr0);
+		raw_1 = gst_bayerir2bayer_lavg_load (src_ptr1);
+
+		/* Preload the previous pixel group (replicates the original x=-4 pass) */
+		pixgrp_0 = raw_0 << src_shift;
+		pixgrp_1 = raw_1 << src_shift;
+		if (src_y & 0x2) {
+			gst_bayerir2bayer_lavg_phase_a (&pixgrp_0, &pixgrp_1, &pixgrp_0_prev, &pixgrp_1_prev);
+		} else {
+			gst_bayerir2bayer_lavg_phase_b (&pixgrp_0, &pixgrp_1, &pixgrp_0_prev, &pixgrp_1_prev);
+		}
+		pixgrp_0_prev = pixgrp_0;
+		pixgrp_1_prev = pixgrp_1;
+
+		/* Process the first pixel group (replicates the original x=0 pass) */
+		pixgrp_0 = raw_0 << src_shift;
+		pixgrp_1 = raw_1 << src_shift;
+		if (src_y & 0x2) {
+			gst_bayerir2bayer_lavg_phase_a (&pixgrp_0, &pixgrp_1, &pixgrp_0_prev, &pixgrp_1_prev);
+		} else {
+			gst_bayerir2bayer_lavg_phase_b (&pixgrp_0, &pixgrp_1, &pixgrp_0_prev, &pixgrp_1_prev);
+		}
+		pixgrp_0_prev = pixgrp_0;
+		pixgrp_1_prev = pixgrp_1;
+
+		if (src_y & 0x2) {
+			for (src_x = 1; src_x < groups; src_x++) {
+				pixgrp_0 = gst_bayerir2bayer_lavg_load (src_ptr0 + (size_t) src_x * 8) << src_shift;
+				pixgrp_1 = gst_bayerir2bayer_lavg_load (src_ptr1 + (size_t) src_x * 8) << src_shift;
+				gst_bayerir2bayer_lavg_phase_a (&pixgrp_0, &pixgrp_1, &pixgrp_0_prev, &pixgrp_1_prev);
+				gst_bayerir2bayer_lavg_store (dst_ptr0 + (size_t) (src_x - 1) * 8, pixgrp_0_prev);
+				gst_bayerir2bayer_lavg_store (dst_ptr1 + (size_t) (src_x - 1) * 8, pixgrp_1_prev);
+				pixgrp_0_prev = pixgrp_0;
+				pixgrp_1_prev = pixgrp_1;
+			}
+		} else {
+			for (src_x = 1; src_x < groups; src_x++) {
+				pixgrp_0 = gst_bayerir2bayer_lavg_load (src_ptr0 + (size_t) src_x * 8) << src_shift;
+				pixgrp_1 = gst_bayerir2bayer_lavg_load (src_ptr1 + (size_t) src_x * 8) << src_shift;
+				gst_bayerir2bayer_lavg_phase_b (&pixgrp_0, &pixgrp_1, &pixgrp_0_prev, &pixgrp_1_prev);
+				gst_bayerir2bayer_lavg_store (dst_ptr0 + (size_t) (src_x - 1) * 8, pixgrp_0_prev);
+				gst_bayerir2bayer_lavg_store (dst_ptr1 + (size_t) (src_x - 1) * 8, pixgrp_1_prev);
+				pixgrp_0_prev = pixgrp_0;
+				pixgrp_1_prev = pixgrp_1;
+			}
+		}
+
+		gst_bayerir2bayer_lavg_store (dst_ptr0 + (size_t) (groups - 1) * 8, pixgrp_0_prev);
+		gst_bayerir2bayer_lavg_store (dst_ptr1 + (size_t) (groups - 1) * 8, pixgrp_1_prev);
+	}
+}
+
+static void
+gst_bayerir2bayer_process_16b_lavg_generic (GstBayerIR2Bayer * filter, uint8_t * dest, uint8_t * src) {
 	uint64_t pixgrp_0, pixgrp_0_prev=0, pixgrp_1, pixgrp_1_prev=0, pixgrp_tmp;
 	uint8_t *dst_ptr0, *dst_ptr1, dst_ptr_inc;
 	uint8_t *src_ptr0, *src_ptr1, src_ptr_inc;
@@ -688,6 +817,18 @@ gst_bayerir2bayer_process_16b_lavg (GstBayerIR2Bayer * filter, uint8_t * dest, u
 		*((uint64_t *) dst_ptr0) = pixgrp_0_prev;
 		*((uint64_t *) dst_ptr1) = pixgrp_1_prev;
 	}
+}
+
+static void
+gst_bayerir2bayer_process_16b_lavg (GstBayerIR2Bayer * filter, uint8_t * dest, uint8_t * src) {
+#ifndef GST_BAYERIR2BAYER_TESTPATTERN_MODE
+	if (!filter->packed && !filter->swap_order) {
+		gst_bayerir2bayer_process_16b_lavg_16 (filter, dest, src);
+		return;
+	}
+#endif
+
+	gst_bayerir2bayer_process_16b_lavg_generic (filter, dest, src);
 }
 
 static void
@@ -1033,6 +1174,7 @@ static GstFlowReturn
 gst_bayerir2bayer_transform (GstBaseTransform * base, GstBuffer * inbuf, GstBuffer * outbuf) {
 	GstBayerIR2Bayer *filter = GST_BAYERIR2BAYER (base);
 	GstMapInfo map_in, map_out;
+	uint8_t *src_data;
 
 	GST_DEBUG ("transforming buffer");
 
@@ -1042,17 +1184,23 @@ gst_bayerir2bayer_transform (GstBaseTransform * base, GstBuffer * inbuf, GstBuff
 	if (!gst_buffer_map (outbuf, &map_out, GST_MAP_WRITE))
 		goto map_out_failed;
 
+	src_data = map_in.data;
+	if (filter->cached_src != NULL && gst_bayerir2bayer_is_dmabuf_buffer (inbuf)) {
+		memcpy (filter->cached_src, map_in.data, (gsize) filter->src_stride * filter->height);
+		src_data = filter->cached_src;
+	}
+
 	/* Process frame */
 	/* Select debayer method to use */
 	switch (filter->bayer_mode) {
 		case GST_BAYER_MODE_RGBIR_FAST:
-			gst_bayerir2bayer_process_16b_fast (filter, map_out.data, map_in.data);
+			gst_bayerir2bayer_process_16b_fast (filter, map_out.data, src_data);
 			break;
 		case GST_BAYER_MODE_RGBIR_LAVG:
-			gst_bayerir2bayer_process_16b_lavg (filter, map_out.data, map_in.data);
+			gst_bayerir2bayer_process_16b_lavg (filter, map_out.data, src_data);
 			break;
 		case GST_BAYER_MODE_RGBIR_TEST:
-			gst_bayerir2bayer_process_16b_test (filter, map_out.data, map_in.data);
+			gst_bayerir2bayer_process_16b_test (filter, map_out.data, src_data);
 			break;
 		default:
 			GST_WARNING_OBJECT (filter, "Invalid debayer mode selected!");
@@ -1296,7 +1444,21 @@ gst_bayerir2bayer_set_caps (GstBaseTransform * base, GstCaps * incaps, GstCaps *
 		filter->src_4pxl_bytes = 8;
 		filter->src_stride = GST_ROUND_UP_4 (filter->width) * DIV_ROUND_UP (filter->src_bpp, 8);
 	}
-	filter->dst_stride = GST_ROUND_UP_4 (filter->width) * DIV_ROUND_UP (filter->src_bpp, 8);
+	filter->dst_stride = GST_ROUND_UP_4 (filter->width) * DIV_ROUND_UP (filter->dst_bpp, 8);
+
+	if (!filter->packed && !filter->swap_order) {
+		gsize src_size = (gsize) filter->src_stride * (filter->height + 1);
+
+		if (filter->cached_src_size < src_size) {
+			g_free (filter->cached_src);
+			filter->cached_src = g_try_malloc (src_size);
+			filter->cached_src_size = filter->cached_src != NULL ? src_size : 0;
+		}
+	} else {
+		g_free (filter->cached_src);
+		filter->cached_src = NULL;
+		filter->cached_src_size = 0;
+	}
 
 	gst_video_info_from_caps (&info, outcaps);
 	filter->info = info;
@@ -1304,6 +1466,10 @@ gst_bayerir2bayer_set_caps (GstBaseTransform * base, GstCaps * incaps, GstCaps *
 	GST_DEBUG_OBJECT (base, "set_caps: output width: %u", info.width);
 	GST_DEBUG_OBJECT (base, "set_caps: output height: %u", info.height);
 	GST_DEBUG_OBJECT (base, "set_caps: output size: %" G_GSIZE_FORMAT, info.size);
+
+	if (filter->bayer_mode == GST_BAYER_MODE_RGBIR_LAVG && filter->filter_ir != GST_IR_FILTER_NONE)
+		GST_ELEMENT_WARNING (base, CORE, NEGOTIATION, (NULL),
+				("IR filtering is not implemented for rgbir-lavg; ignoring filter-ir"));
 
 	return TRUE;
 }
@@ -1338,35 +1504,51 @@ gst_bayerir2bayer_transform_caps (GstBaseTransform * base, GstPadDirection direc
 	return res_caps;
 }
 
+static int
+gst_bayerir2bayer_caps_bpp (GstCaps * caps) {
+	GstStructure *structure;
+	const char *format;
+
+	if (caps == NULL || gst_caps_get_size (caps) == 0)
+		return 0;
+	structure = gst_caps_get_structure (caps, 0);
+	if (structure == NULL)
+		return 0;
+	format = gst_structure_get_string (structure, "format");
+
+	if (format == NULL)
+		return 0;
+	if (strlen (format) == 4)
+		return 8;
+	if (strlen (format) == 8)
+		return (int) g_ascii_strtoull (format + 4, NULL, 10);
+	return 0;
+}
+
 static gboolean
 gst_bayerir2bayer_get_unit_size (GstBaseTransform * base, GstCaps * caps, gsize * size) {
 	GstStructure *structure;
 	GstBayerIR2Bayer *filter;
 	int width;
 	int height;
-//	const char *name;
+	int bpp;
 
 	structure = gst_caps_get_structure (caps, 0);
 	filter = GST_BAYERIR2BAYER (base);
 
 	if (gst_structure_get_int (structure, "width", &width) && gst_structure_get_int (structure, "height", &height)) {
-//		name = gst_structure_get_name (structure);
-//		/* Our name must be either video/x-bayer video/x-raw */
-//		if (strcmp (name, "video/x-raw") == 0) {
-//			/* For output, calculate according to format */
-//			*size = width * height * DIV_ROUND_UP (filter->dst_bpp, 8);
-//			return TRUE;
-//		} else {
 			/* Check whether this is the input caps when handling a packed stream */
 			if ((filter->packed) && (filter->caps_in == caps)) {
 				/* FixMe: Need to get this from V4L2 stream */
 				*size = GST_BAYERIR2RGB_SRC_FRAME_SIZE;
 			} else {
-				*size = GST_ROUND_UP_4 (width) * height * DIV_ROUND_UP (filter->src_bpp, 8);
+				bpp = gst_bayerir2bayer_caps_bpp (caps);
+				if (bpp == 0)
+					bpp = (filter->caps_in == caps) ? filter->src_bpp : filter->dst_bpp;
+				*size = GST_ROUND_UP_4 (width) * height * DIV_ROUND_UP (bpp, 8);
 			}
 			GST_DEBUG_OBJECT (base, "get_unit_size: size %" G_GSIZE_FORMAT, *size);
 			return TRUE;
-//		}
 	}
 	GST_ELEMENT_ERROR (base, CORE, NEGOTIATION, (NULL), ("Incomplete caps, some required field missing"));
 	return FALSE;
@@ -1394,6 +1576,10 @@ gst_bayerir2bayer_reset (GstBayerIR2Bayer * filter) {
 	filter->swap_order = GST_SWAP_ORDER_DEFAULT;
 	filter->bayer_mode = GST_BAYER_MODE_DEFAULT;
 
+	g_free (filter->cached_src);
+	filter->cached_src = NULL;
+	filter->cached_src_size = 0;
+
 	gst_video_info_init (&filter->info);
 }
 
@@ -1406,6 +1592,16 @@ gst_bayerir2bayer_init (GstBayerIR2Bayer * filter) {
 }
 
 static void
+gst_bayerir2bayer_finalize (GObject * object) {
+	GstBayerIR2Bayer *filter = GST_BAYERIR2BAYER (object);
+
+	g_free (filter->cached_src);
+	filter->cached_src = NULL;
+
+	G_OBJECT_CLASS (parent_class)->finalize (object);
+}
+
+static void
 gst_bayerir2bayer_class_init (GstBayerIR2BayerClass * klass) {
 	GObjectClass *gobject_class;
 	GstElementClass *gstelement_class;
@@ -1415,6 +1611,7 @@ gst_bayerir2bayer_class_init (GstBayerIR2BayerClass * klass) {
 
 	gobject_class->set_property = gst_bayerir2bayer_set_property;
 	gobject_class->get_property = gst_bayerir2bayer_get_property;
+	gobject_class->finalize = gst_bayerir2bayer_finalize;
 
 	/* Add properties */
 	g_object_class_install_property (gobject_class, PROP_BAYER_MODE,

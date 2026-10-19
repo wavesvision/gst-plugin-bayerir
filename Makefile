@@ -1,10 +1,10 @@
-CC := gcc
+CC := gcc-14
 
 PKG_CFG := gstreamer-1.0 gstreamer-base-1.0 orc-0.4
 PKG_CFG_ALL := gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 orc-0.4
 
 #CFLAGS := -O2 -Wall -Werror -fPIC $(shell pkg-config --cflags $(PKG_CFG_ALL))
-CFLAGS := -O2 -Wall -fPIC $(shell pkg-config --cflags $(PKG_CFG))
+CFLAGS := -O3 -mcpu=cortex-a76 -Wall -fPIC $(shell pkg-config --cflags $(PKG_CFG))
 #CFLAGS := -Wall -fPIC $(shell pkg-config --cflags $(PKG_CFG))
 
 LDFLAGS := $(shell pkg-config --libs $(PKG_CFG_ALL))
